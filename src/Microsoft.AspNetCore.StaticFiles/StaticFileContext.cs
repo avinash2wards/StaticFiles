@@ -48,8 +48,10 @@ namespace Microsoft.AspNetCore.StaticFiles
         private PreconditionState _ifNoneMatchState;
         private PreconditionState _ifModifiedSinceState;
         private PreconditionState _ifUnmodifiedSinceState;
+        private PreconditionState _ifRangeState;
 
-        private IList<RangeItemHeaderValue> _ranges;
+        private RangeItemHeaderValue _range;
+        private bool _isRangeRequest;
 
         public StaticFileContext(HttpContext context, StaticFileOptions options, PathString matchUrl, ILogger logger, IFileProvider fileProvider, IContentTypeProvider contentTypeProvider)
         {
@@ -77,7 +79,9 @@ namespace Microsoft.AspNetCore.StaticFiles
             _ifNoneMatchState = PreconditionState.Unspecified;
             _ifModifiedSinceState = PreconditionState.Unspecified;
             _ifUnmodifiedSinceState = PreconditionState.Unspecified;
-            _ranges = null;
+            _ifRangeState = PreconditionState.Unspecified;
+            _range = null;
+            _isRangeRequest = false;
         }
 
         internal enum PreconditionState
@@ -86,6 +90,7 @@ namespace Microsoft.AspNetCore.StaticFiles
             NotModified,
             ShouldProcess,
             PreconditionFailed,
+            IgnoreRangeRequest
         }
 
         public bool IsHeadMethod
@@ -95,7 +100,7 @@ namespace Microsoft.AspNetCore.StaticFiles
 
         public bool IsRangeRequest
         {
-            get { return _ranges != null; }
+            get { return _isRangeRequest; }
         }
 
         public string SubPath
@@ -218,6 +223,37 @@ namespace Microsoft.AspNetCore.StaticFiles
             }
         }
 
+        private void ComputeIfRange(RequestHeaders requestHeaders, DateTimeOffset? lastModified = null, EntityTagHeaderValue etag = null)
+        {
+            // 14.27 If-Range
+            var ifRangeHeader = requestHeaders.IfRange;
+            if (ifRangeHeader != null)
+            {
+                // If the validator given in the If-Range header field matches the
+                // current validator for the selected representation of the target
+                // resource, then the server SHOULD process the Range header field as
+                // requested.  If the validator does not match, the server MUST ignore
+                // the Range header field.
+                bool ignoreRangeHeader = false;
+                if (ifRangeHeader.LastModified.HasValue)
+                {
+                    if (lastModified.HasValue && lastModified > ifRangeHeader.LastModified)
+                    {
+                        ignoreRangeHeader = true;
+                    }
+                }
+                else if (etag != null && ifRangeHeader.EntityTag != null && !ifRangeHeader.EntityTag.Compare(etag, useStrongComparison: true))
+                {
+                    ignoreRangeHeader = true;
+                }
+
+                if (ignoreRangeHeader)
+                {
+                    _ifRangeState = PreconditionState.IgnoreRangeRequest;
+                }
+            }
+        }
+
         private void ComputeRange()
         {
             // 14.35 Range
@@ -230,8 +266,8 @@ namespace Microsoft.AspNetCore.StaticFiles
                 return;
             }
 
-            var parsedRange = RangeHelper.ParseRange(_context, _requestHeaders, _lastModified, _etag);            
-            _ranges = RangeHelper.NormalizeRanges(parsedRange, _length);
+            ComputeIfRange(_requestHeaders, _lastModified, _etag);
+            (_isRangeRequest, _range) = RangeHelper.ParseRange(_context, _requestHeaders, _length, _lastModified, _etag);
         }
 
         public void ApplyResponseHeaders(int statusCode)
@@ -266,7 +302,7 @@ namespace Microsoft.AspNetCore.StaticFiles
         public PreconditionState GetPreconditionState()
         {
             return GetMaxPreconditionState(_ifMatchState, _ifNoneMatchState,
-                _ifModifiedSinceState, _ifUnmodifiedSinceState);
+                _ifModifiedSinceState, _ifUnmodifiedSinceState, _ifRangeState);
         }
 
         private static PreconditionState GetMaxPreconditionState(params PreconditionState[] states)
@@ -322,13 +358,7 @@ namespace Microsoft.AspNetCore.StaticFiles
         // When there is only a single range the bytes are sent directly in the body.
         internal async Task SendRangeAsync()
         {
-            bool rangeNotSatisfiable = false;
-            if (_ranges.Count == 0)
-            {
-                rangeNotSatisfiable = true;
-            }
-
-            if (rangeNotSatisfiable)
+            if (_range == null)
             {
                 // 14.16 Content-Range - A server sending a response with status code 416 (Requested range not satisfiable)
                 // SHOULD include a Content-Range field with a byte-range-resp-spec of "*". The instance-length specifies
@@ -340,11 +370,8 @@ namespace Microsoft.AspNetCore.StaticFiles
                 return;
             }
 
-            // Multi-range is not supported.
-            Debug.Assert(_ranges.Count == 1);
-
             long start, length;
-            _responseHeaders.ContentRange = ComputeContentRange(_ranges[0], out start, out length);
+            _responseHeaders.ContentRange = ComputeContentRange(_range, out start, out length);
             _response.ContentLength = length;
             ApplyResponseHeaders(Constants.Status206PartialContent);
 

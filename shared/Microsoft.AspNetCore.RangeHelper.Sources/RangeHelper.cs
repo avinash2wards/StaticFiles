@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Headers;
 using Microsoft.Extensions.Primitives;
@@ -21,15 +22,21 @@ namespace Microsoft.AspNetCore.Internal
         /// </summary>
         /// <param name="context">The <see cref="HttpContext"/> associated with the request.</param>
         /// <param name="requestHeaders">The <see cref="RequestHeaders"/> associated with the given <paramref name="context"/>.</param>
+        /// <param name="length">The total length of the file representation requested.</param>
         /// <param name="lastModified">The <see cref="DateTimeOffset"/> representation of the last modified date of the file.</param>
         /// <param name="etag">The <see cref="EntityTagHeaderValue"/> provided in the <see cref="HttpContext.Request"/>.</param>
         /// <returns>A collection of <see cref="RangeItemHeaderValue"/> containing the ranges parsed from the <paramref name="requestHeaders"/>.</returns>
-        public static ICollection<RangeItemHeaderValue> ParseRange(HttpContext context, RequestHeaders requestHeaders, DateTimeOffset? lastModified = null, EntityTagHeaderValue etag = null)
+        public static (bool, RangeItemHeaderValue) ParseRange(
+            HttpContext context,
+            RequestHeaders requestHeaders,
+            long length,
+            DateTimeOffset? lastModified = null,
+            EntityTagHeaderValue etag = null)
         {
             var rawRangeHeader = context.Request.Headers[HeaderNames.Range];
             if (StringValues.IsNullOrEmpty(rawRangeHeader))
             {
-                return null;
+                return (false, null);
             }
 
             // Perf: Check for a single entry before parsing it
@@ -38,131 +45,80 @@ namespace Microsoft.AspNetCore.Internal
                 // The spec allows for multiple ranges but we choose not to support them because the client may request
                 // very strange ranges (e.g. each byte separately, overlapping ranges, etc.) that could negatively
                 // impact the server. Ignore the header and serve the response normally.               
-                return null;
+                return (false, null);
             }
 
             var rangeHeader = requestHeaders.Range;
             if (rangeHeader == null)
             {
                 // Invalid
-                return null;
+                return (false, null);
             }
 
             // Already verified above
             Debug.Assert(rangeHeader.Ranges.Count == 1);
 
-            // 14.27 If-Range
-            var ifRangeHeader = requestHeaders.IfRange;
-            if (ifRangeHeader != null)
-            {
-                // If the validator given in the If-Range header field matches the
-                // current validator for the selected representation of the target
-                // resource, then the server SHOULD process the Range header field as
-                // requested.  If the validator does not match, the server MUST ignore
-                // the Range header field.
-                bool ignoreRangeHeader = false;
-                if (ifRangeHeader.LastModified.HasValue)
-                {
-                    if (lastModified.HasValue && lastModified > ifRangeHeader.LastModified)
-                    {
-                        ignoreRangeHeader = true;
-                    }
-                }
-                else if (etag != null && ifRangeHeader.EntityTag != null && !ifRangeHeader.EntityTag.Compare(etag, useStrongComparison: true))
-                {
-                    ignoreRangeHeader = true;
-                }
-
-                if (ignoreRangeHeader)
-                {
-                    return null;
-                }
-            }
-          
-            return rangeHeader.Ranges;
-        }
-
-        /// <summary>
-        /// A helper method to normalize a collection of <see cref="RangeItemHeaderValue"/>s.
-        /// </summary>
-        /// <param name="ranges">A collection of <see cref="RangeItemHeaderValue"/> to normalize.</param>
-        /// <param name="length">The total length of the file representation requested.</param>
-        /// <returns>A normalized list of <see cref="RangeItemHeaderValue"/>s.</returns>
-        // 14.35.1 Byte Ranges - If a syntactically valid byte-range-set includes at least one byte-range-spec whose
-        // first-byte-pos is less than the current length of the entity-body, or at least one suffix-byte-range-spec
-        // with a non-zero suffix-length, then the byte-range-set is satisfiable.
-        // Adjusts ranges to be absolute and within bounds.
-        public static IList<RangeItemHeaderValue> NormalizeRanges(ICollection<RangeItemHeaderValue> ranges, long length)
-        {
+            var ranges = rangeHeader.Ranges;
             if (ranges == null)
             {
-                return null;
+                return (false, null);
             }
 
             if (ranges.Count == 0)
             {
-                return Array.Empty<RangeItemHeaderValue>();
+                return (true, null);
             }
 
             if (length == 0)
             {
-                return Array.Empty<RangeItemHeaderValue>();
+                return (true, null);
             }
 
-            var normalizedRanges = new List<RangeItemHeaderValue>(ranges.Count);
-            foreach (var range in ranges)
-            {
-                var normalizedRange = NormalizeRange(range, length);
+            // Normalize the ranges
+            ranges = NormalizeRanges(ranges, length);
 
-                if (normalizedRange != null)
-                {
-                    normalizedRanges.Add(normalizedRange);
-                }
-            }
-
-            return normalizedRanges;
+            // Return the single range
+            return (true, ranges.SingleOrDefault());
         }
 
-        /// <summary>
-        /// A helper method to normalize a <see cref="RangeItemHeaderValue"/>.
-        /// </summary>
-        /// <param name="range">The <see cref="RangeItemHeaderValue"/> to normalize.</param>
-        /// <param name="length">The total length of the file representation requested.</param>
-        /// <returns>A normalized <see cref="RangeItemHeaderValue"/>.</returns>
-        public static RangeItemHeaderValue NormalizeRange(RangeItemHeaderValue range, long length)
+        // Internal for testing
+        internal static IList<RangeItemHeaderValue> NormalizeRanges(ICollection<RangeItemHeaderValue> ranges, long length)
         {
-            var start = range.From;
-            var end = range.To;
-
-            // X-[Y]
-            if (start.HasValue)
+            IList<RangeItemHeaderValue> normalizedRanges = new List<RangeItemHeaderValue>(ranges.Count);
+            foreach (var range in ranges)
             {
-                if (start.Value >= length)
-                {
-                    // Not satisfiable, skip/discard.
-                    return null;
-                }
-                if (!end.HasValue || end.Value >= length)
-                {
-                    end = length - 1;
-                }
-            }
-            else
-            {
-                // suffix range "-X" e.g. the last X bytes, resolve
-                if (end.Value == 0)
-                {
-                    // Not satisfiable, skip/discard.
-                    return null;
-                }
+                long? start = range.From;
+                long? end = range.To;
 
-                var bytes = Math.Min(end.Value, length);
-                start = length - bytes;
-                end = start + bytes - 1;
-            }
+                // X-[Y]
+                if (start.HasValue)
+                {
+                    if (start.Value >= length)
+                    {
+                        // Not satisfiable, skip/discard.
+                        continue;
+                    }
+                    if (!end.HasValue || end.Value >= length)
+                    {
+                        end = length - 1;
+                    }
+                }
+                else
+                {
+                    // suffix range "-X" e.g. the last X bytes, resolve
+                    if (end.Value == 0)
+                    {
+                        // Not satisfiable, skip/discard.
+                        continue;
+                    }
 
-            var normalizedRange = new RangeItemHeaderValue(start, end);
-            return normalizedRange;
+                    long bytes = Math.Min(end.Value, length);
+                    start = length - bytes;
+                    end = start + bytes - 1;
+                }
+                normalizedRanges.Add(new RangeItemHeaderValue(start.Value, end.Value));
+            }
+            return normalizedRanges;
         }
     }
 }
