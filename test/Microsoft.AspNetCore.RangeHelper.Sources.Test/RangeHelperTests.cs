@@ -175,40 +175,6 @@ namespace Microsoft.AspNetCore.Internal
             Assert.Null(parsedRangeResult);
         }
 
-        //[Fact]
-        //public void ParseRange_ReturnsNullWhenLastModifiedGreaterThanIfRangeHeaderLastModified()
-        //{
-        //    // Arrange
-        //    var httpContext = new DefaultHttpContext();
-        //    var range = new RangeHeaderValue(1, 2);
-        //    httpContext.Request.Headers[HeaderNames.Range] = range.ToString();
-        //    var lastModified = new RangeConditionHeaderValue(DateTime.Now);
-        //    httpContext.Request.Headers[HeaderNames.IfRange] = lastModified.ToString();
-
-        //    // Act
-        //    var parsedRangeResult = RangeHelper.ParseRange(httpContext, httpContext.Request.GetTypedHeaders(), 10, DateTime.Now.AddMilliseconds(2), null);
-
-        //    // Assert
-        //    Assert.Null(parsedRangeResult);
-        //}
-
-        //[Fact]
-        //public void ParseRange_ReturnsNullWhenETagNotEqualToIfRangeHeaderEntityTag()
-        //{
-        //    // Arrange
-        //    var httpContext = new DefaultHttpContext();
-        //    var range = new RangeHeaderValue(1, 2);
-        //    httpContext.Request.Headers[HeaderNames.Range] = range.ToString();
-        //    var etag = new RangeConditionHeaderValue("\"tag\"");
-        //    httpContext.Request.Headers[HeaderNames.IfRange] = etag.ToString();
-
-        //    // Act
-        //    var parsedRangeResult = RangeHelper.ParseRange(httpContext, httpContext.Request.GetTypedHeaders(), 10, DateTime.Now, new EntityTagHeaderValue("\"etag\""));
-
-        //    // Assert
-        //    Assert.Null(parsedRangeResult);
-        //}
-
         [Fact]
         public void ParseRange_ReturnsSingleRangeWhenInputValid()
         {
