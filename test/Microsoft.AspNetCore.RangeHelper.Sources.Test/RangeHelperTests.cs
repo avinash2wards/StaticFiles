@@ -11,134 +11,50 @@ namespace Microsoft.AspNetCore.Internal
 {
     public class RangeHelperTests
     {
-        [Fact]
-        public void NormalizeRanges_ReturnsEmptyArrayWhenRangeCountZero()
-        {
-            // Arrange
-            var ranges = new List<RangeItemHeaderValue>();
-
-            // Act
-            var normalizedRanges = RangeHelper.NormalizeRanges(ranges, 2);
-
-            // Assert
-            Assert.Empty(normalizedRanges);
-        }
-
-        [Fact]
-        public void NormalizeRanges_ReturnsEmptyArrayWhenLengthZero()
-        {
-            // Arrange
-            var ranges = new[]
-            {
-                new RangeItemHeaderValue(0, 0),
-            };
-
-            // Act
-            var normalizedRanges = RangeHelper.NormalizeRanges(ranges, 0);
-
-            // Assert
-            Assert.Empty(normalizedRanges);
-        }
-
         [Theory]
         [InlineData(1, 2)]
         [InlineData(2, 3)]
-        public void NormalizeRanges_SkipsItemWhenRangeStartEqualOrGreaterThanLength(long start, long end)
+        public void NormalizeRange_ReturnsNullWhenRangeStartEqualsOrGreaterThanLength(long start, long end)
         {
-            // Arrange
-            var ranges = new[]
-            {
-                new RangeItemHeaderValue(start, end),
-            };
-
-            // Act
-            var normalizedRanges = RangeHelper.NormalizeRanges(ranges, 1);
+            // Arrange & Act
+            var normalizedRange = RangeHelper.NormalizeRange(new RangeItemHeaderValue(start, end), 1);
 
             // Assert
-            Assert.Empty(normalizedRanges);
+            Assert.Null(normalizedRange);
         }
 
         [Fact]
-        public void NormalizeRanges_SkipsItemWhenRangeEndEqualsZero()
+        public void NormalizeRange_ReturnsNullWhenRangeEndEqualsZero()
         {
-            // Arrange
-            var ranges = new[]
-            {
-                new RangeItemHeaderValue(null, 0),
-            };
-
-            // Act
-            var normalizedRanges = RangeHelper.NormalizeRanges(ranges, 1);
+            // Arrange & Act
+            var normalizedRange = RangeHelper.NormalizeRange(new RangeItemHeaderValue(null, 0), 1);
 
             // Assert
-            Assert.Empty(normalizedRanges);
+            Assert.Null(normalizedRange);
         }
 
         [Theory]
         [InlineData(0, null, 0, 2)]
         [InlineData(0, 0, 0, 0)]
-        public void NormalizeRanges_ReturnsNormalizedRange(long? start, long? end, long? normalizedStart, long? normalizedEnd)
+        public void NormalizeRange_ReturnsNormalizedRange(long? start, long? end, long? normalizedStart, long? normalizedEnd)
         {
-            // Arrange
-            var ranges = new[]
-            {
-                new RangeItemHeaderValue(start, end),
-            };
-
-            // Act
-            var normalizedRanges = RangeHelper.NormalizeRanges(ranges, 3);
+            // Arrange & Act
+            var normalizedRange = RangeHelper.NormalizeRange(new RangeItemHeaderValue(start, end), 3);
 
             // Assert
-            var range = Assert.Single(normalizedRanges);
-            Assert.Equal(normalizedStart, range.From);
-            Assert.Equal(normalizedEnd, range.To);
+            Assert.Equal(normalizedStart, normalizedRange.From);
+            Assert.Equal(normalizedEnd, normalizedRange.To);
         }
 
         [Fact]
-        public void NormalizeRanges_ReturnsRangeWithNoChange()
+        public void NormalizeRange_ReturnsRangeWithNoChange()
         {
-            // Arrange
-            var ranges = new[]
-            {
-                new RangeItemHeaderValue(1, 3),
-            };
-
-            // Act
-            var normalizedRanges = RangeHelper.NormalizeRanges(ranges, 4);
+            // Arrange & Act
+            var normalizedRange = RangeHelper.NormalizeRange(new RangeItemHeaderValue(1, 3), 4);
 
             // Assert
-            var range = Assert.Single(normalizedRanges);
-            Assert.Equal(1, range.From);
-            Assert.Equal(3, range.To);
-        }
-
-        [Theory]
-        [InlineData(0, null, 0, 2)]
-        [InlineData(0, 0, 0, 0)]
-        public void NormalizeRanges_MultipleRanges_ReturnsNormalizedRange(long? start, long? end, long? normalizedStart, long? normalizedEnd)
-        {
-            // Arrange
-            var ranges = new[]
-            {
-                new RangeItemHeaderValue(start, end),
-                new RangeItemHeaderValue(1, 2),
-            };
-
-            // Act
-            var normalizedRanges = RangeHelper.NormalizeRanges(ranges, 3);
-
-            // Assert
-            Assert.Collection(normalizedRanges,
-                range =>
-                {
-                    Assert.Equal(normalizedStart, range.From);
-                    Assert.Equal(normalizedEnd, range.To);
-                },
-                range =>
-                {
-                    Assert.Equal(1, range.From);
-                    Assert.Equal(2, range.To);
-                });
+            Assert.Equal(1, normalizedRange.From);
+            Assert.Equal(3, normalizedRange.To);
         }
 
         [Theory]
@@ -189,25 +105,6 @@ namespace Microsoft.AspNetCore.Internal
 
             // Act
             var (isRangeRequest, parsedRange) = RangeHelper.ParseRange(httpContext, httpContext.Request.GetTypedHeaders(), 4, DateTime.Now, new EntityTagHeaderValue("\"etag\""));
-
-            // Assert
-            Assert.True(isRangeRequest);
-            Assert.Equal(1, parsedRange.From);
-            Assert.Equal(2, parsedRange.To);
-        }
-
-        [Fact]
-        public void ParseRange_ReturnsRangeWhenLastModifiedAndEtagNull()
-        {
-            // Arrange
-            var httpContext = new DefaultHttpContext();
-            var range = new RangeHeaderValue(1, 2);
-            httpContext.Request.Headers[HeaderNames.Range] = range.ToString();
-            var lastModified = new RangeConditionHeaderValue(DateTime.Now);
-            httpContext.Request.Headers[HeaderNames.IfRange] = lastModified.ToString();
-
-            // Act
-            var (isRangeRequest, parsedRange) = RangeHelper.ParseRange(httpContext, httpContext.Request.GetTypedHeaders(), 4);
 
             // Assert
             Assert.True(isRangeRequest);

@@ -91,7 +91,6 @@ namespace Microsoft.AspNetCore.StaticFiles
             {
                 // If we get here, we can try to serve the file
                 fileContext.ComprehendRequestHeaders();
-                var state = fileContext.GetPreconditionState();
                 switch (fileContext.GetPreconditionState())
                 {
                     case StaticFileContext.PreconditionState.Unspecified:

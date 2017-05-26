@@ -25,13 +25,14 @@ namespace Microsoft.AspNetCore.Internal
         /// <param name="length">The total length of the file representation requested.</param>
         /// <param name="lastModified">The <see cref="DateTimeOffset"/> representation of the last modified date of the file.</param>
         /// <param name="etag">The <see cref="EntityTagHeaderValue"/> provided in the <see cref="HttpContext.Request"/>.</param>
-        /// <returns>A collection of <see cref="RangeItemHeaderValue"/> containing the ranges parsed from the <paramref name="requestHeaders"/>.</returns>
+        /// <returns>A <see cref="RangeItemHeaderValue"/> which represents the normalized form of the range parsed from 
+        /// the <paramref name="requestHeaders"/>.</returns>
         public static (bool, RangeItemHeaderValue) ParseRange(
             HttpContext context,
             RequestHeaders requestHeaders,
             long length,
-            DateTimeOffset? lastModified = null,
-            EntityTagHeaderValue etag = null)
+            DateTimeOffset? lastModified,
+            EntityTagHeaderValue etag)
         {
             var rawRangeHeader = context.Request.Headers[HeaderNames.Range];
             if (StringValues.IsNullOrEmpty(rawRangeHeader))
@@ -75,50 +76,46 @@ namespace Microsoft.AspNetCore.Internal
             }
 
             // Normalize the ranges
-            ranges = NormalizeRanges(ranges, length);
+            var range = NormalizeRange(ranges.SingleOrDefault(), length);
 
             // Return the single range
-            return (true, ranges.SingleOrDefault());
+            return (true, range);
         }
 
         // Internal for testing
-        internal static IList<RangeItemHeaderValue> NormalizeRanges(ICollection<RangeItemHeaderValue> ranges, long length)
+        internal static RangeItemHeaderValue NormalizeRange(RangeItemHeaderValue range, long length)
         {
-            IList<RangeItemHeaderValue> normalizedRanges = new List<RangeItemHeaderValue>(ranges.Count);
-            foreach (var range in ranges)
+            long? start = range.From;
+            long? end = range.To;
+
+            // X-[Y]
+            if (start.HasValue)
             {
-                long? start = range.From;
-                long? end = range.To;
-
-                // X-[Y]
-                if (start.HasValue)
+                if (start.Value >= length)
                 {
-                    if (start.Value >= length)
-                    {
-                        // Not satisfiable, skip/discard.
-                        continue;
-                    }
-                    if (!end.HasValue || end.Value >= length)
-                    {
-                        end = length - 1;
-                    }
+                    // Not satisfiable, skip/discard.
+                    return null;
                 }
-                else
+                if (!end.HasValue || end.Value >= length)
                 {
-                    // suffix range "-X" e.g. the last X bytes, resolve
-                    if (end.Value == 0)
-                    {
-                        // Not satisfiable, skip/discard.
-                        continue;
-                    }
-
-                    long bytes = Math.Min(end.Value, length);
-                    start = length - bytes;
-                    end = start + bytes - 1;
+                    end = length - 1;
                 }
-                normalizedRanges.Add(new RangeItemHeaderValue(start.Value, end.Value));
             }
-            return normalizedRanges;
+            else
+            {
+                // suffix range "-X" e.g. the last X bytes, resolve
+                if (end.Value == 0)
+                {
+                    // Not satisfiable, skip/discard.
+                    return null;
+                }
+
+                long bytes = Math.Min(end.Value, length);
+                start = length - bytes;
+                end = start + bytes - 1;
+            }
+
+            return new RangeItemHeaderValue(start, end);
         }
     }
 }
